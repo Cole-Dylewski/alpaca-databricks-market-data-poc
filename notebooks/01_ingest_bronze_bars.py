@@ -1,8 +1,11 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Get S&P 500 Stock Symbols
+# MAGIC # Bronze Layer: S&P 500 Symbol Discovery & Data Ingestion
 # MAGIC
-# MAGIC Simple notebook to retrieve and display S&P 500 stock symbols from stockanalysis.com.
+# MAGIC This notebook:
+# MAGIC 1. Retrieves S&P 500 stock symbols from stockanalysis.com
+# MAGIC 2. Fetches previous day's 5-minute bar data for each symbol
+# MAGIC 3. Prepares data for bronze layer processing
 
 # COMMAND ----------
 
@@ -137,13 +140,59 @@ print(f"Added project root to path: {project_root}")
 
 # COMMAND ----------
 
-from src.utils import get_sp500_symbols
-
+from src.utils import get_sp500_symbols, fetch_previous_day_5min_bars
 
 # COMMAND ----------
 
-# Run the function
+# Step 1: Get S&P 500 symbols
 symbols = get_sp500_symbols()
 print(f"\n=== S&P 500 Stock Symbols ({len(symbols)} total) ===")
-for symbol in symbols:
-    print(symbol)
+print(f"First 10 symbols: {symbols[:10]}")
+print(f"Last 10 symbols: {symbols[-10:]}")
+
+# COMMAND ----------
+
+# Step 2: Fetch previous day's 5-minute bar data
+# For demonstration, we'll fetch data for a small subset of symbols
+# In production, you would process all symbols (possibly in batches)
+
+sample_symbols = symbols[:5]  # First 5 symbols for demo
+print(f"\nFetching previous day's 5-minute data for {len(sample_symbols)} symbols...")
+print(f"Symbols: {sample_symbols}")
+
+bars_data = fetch_previous_day_5min_bars(sample_symbols)
+
+# Display results
+for symbol in sample_symbols:
+    if symbol in bars_data and bars_data[symbol]:
+        num_bars = len(bars_data[symbol])
+        print(f"\n{symbol}: {num_bars} bars")
+        if num_bars > 0:
+            first_bar = bars_data[symbol][0]
+            last_bar = bars_data[symbol][-1]
+            print(f"  First bar: {first_bar['timestamp']} - Close: ${first_bar['close']:.2f}")
+            print(f"  Last bar: {last_bar['timestamp']} - Close: ${last_bar['close']:.2f}")
+    else:
+        print(f"\n{symbol}: No data available")
+
+# COMMAND ----------
+
+# Step 3: Summary statistics
+total_bars = sum(len(bars) for bars in bars_data.values())
+symbols_with_data = sum(1 for bars in bars_data.values() if bars)
+
+print(f"\n=== Summary ===")
+print(f"Total symbols processed: {len(sample_symbols)}")
+print(f"Symbols with data: {symbols_with_data}")
+print(f"Total bars fetched: {total_bars}")
+print(f"Average bars per symbol: {total_bars / symbols_with_data if symbols_with_data > 0 else 0:.1f}")
+
+# COMMAND ----------
+
+# TODO: Save bars_data to bronze layer (JSON files or Delta tables)
+# Example:
+# import json
+# for symbol, bars in bars_data.items():
+#     if bars:
+#         with open(f"bronze/bars/{symbol}.json", "w") as f:
+#             json.dump(bars, f, default=str)

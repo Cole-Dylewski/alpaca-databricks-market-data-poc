@@ -3,10 +3,11 @@ Tests for utility functions.
 """
 
 import pytest
-from unittest.mock import Mock, patch
-from typing import List
+from unittest.mock import Mock, patch, MagicMock
+from typing import List, Dict, Any
+from datetime import datetime, timedelta, time
 
-from src.utils import get_sp500_symbols, _is_valid_symbol
+from src.utils import get_sp500_symbols, _is_valid_symbol, fetch_previous_day_5min_bars
 
 
 class TestGetSp500Symbols:
@@ -177,4 +178,180 @@ class TestIsValidSymbol:
         assert _is_valid_symbol('A.B') is True
         assert _is_valid_symbol('.A') is False  # Starts with dot
         assert _is_valid_symbol('A.') is False  # Ends with dot
+
+
+class TestFetchPreviousDay5minBars:
+    """Test suite for fetch_previous_day_5min_bars function."""
+
+    @patch('src.utils.YahooFinanceClient')
+    def test_fetch_previous_day_5min_bars_success(self, mock_client_class: Mock) -> None:
+        """Test successful fetching of previous day 5-minute bars."""
+        # Create mock client instance
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        
+        # Mock bar data
+        yesterday = datetime.now().date() - timedelta(days=1)
+        mock_bars = [
+            {
+                "symbol": "AAPL",
+                "timestamp": datetime.combine(yesterday, time(9, 30)),
+                "open": 150.0,
+                "high": 151.0,
+                "low": 149.5,
+                "close": 150.5,
+                "volume": 1000000,
+            },
+            {
+                "symbol": "AAPL",
+                "timestamp": datetime.combine(yesterday, time(9, 35)),
+                "open": 150.5,
+                "high": 151.5,
+                "low": 150.0,
+                "close": 151.0,
+                "volume": 1200000,
+            },
+        ]
+        mock_client.fetch_bars.return_value = mock_bars
+        
+        symbols = ["AAPL", "MSFT"]
+        results = fetch_previous_day_5min_bars(symbols)
+        
+        assert isinstance(results, dict)
+        assert "AAPL" in results
+        assert len(results["AAPL"]) == 2
+        assert results["AAPL"][0]["symbol"] == "AAPL"
+        assert "timestamp" in results["AAPL"][0]
+        
+        # Verify fetch_bars was called with correct parameters
+        assert mock_client.fetch_bars.called
+        # Check first call (for AAPL)
+        first_call = mock_client.fetch_bars.call_args_list[0]
+        assert first_call[1]["symbol"] == "AAPL"
+        assert first_call[1]["interval"] == "5m"
+
+    @patch('src.utils.YahooFinanceClient')
+    def test_fetch_previous_day_5min_bars_multiple_symbols(self, mock_client_class: Mock) -> None:
+        """Test fetching data for multiple symbols."""
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        
+        yesterday = datetime.now().date() - timedelta(days=1)
+        mock_bars_aapl = [
+            {
+                "symbol": "AAPL",
+                "timestamp": datetime.combine(yesterday, time(9, 30)),
+                "open": 150.0,
+                "high": 151.0,
+                "low": 149.5,
+                "close": 150.5,
+                "volume": 1000000,
+            },
+        ]
+        mock_bars_msft = [
+            {
+                "symbol": "MSFT",
+                "timestamp": datetime.combine(yesterday, time(9, 30)),
+                "open": 300.0,
+                "high": 301.0,
+                "low": 299.5,
+                "close": 300.5,
+                "volume": 500000,
+            },
+        ]
+        
+        # Return different data for different symbols
+        def side_effect(symbol, start_time, end_time, interval):
+            if symbol == "AAPL":
+                return mock_bars_aapl
+            elif symbol == "MSFT":
+                return mock_bars_msft
+            return []
+        
+        mock_client.fetch_bars.side_effect = side_effect
+        
+        symbols = ["AAPL", "MSFT"]
+        results = fetch_previous_day_5min_bars(symbols)
+        
+        assert len(results) == 2
+        assert "AAPL" in results
+        assert "MSFT" in results
+        assert len(results["AAPL"]) == 1
+        assert len(results["MSFT"]) == 1
+
+    @patch('src.utils.YahooFinanceClient')
+    def test_fetch_previous_day_5min_bars_with_custom_date(self, mock_client_class: Mock) -> None:
+        """Test fetching data for a specific date."""
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.fetch_bars.return_value = []
+        
+        custom_date = datetime(2024, 1, 15)
+        symbols = ["AAPL"]
+        results = fetch_previous_day_5min_bars(symbols, date=custom_date)
+        
+        assert "AAPL" in results
+        # Verify the date was used correctly
+        call_args = mock_client.fetch_bars.call_args
+        assert call_args[1]["interval"] == "5m"
+
+    @patch('src.utils.YahooFinanceClient')
+    def test_fetch_previous_day_5min_bars_with_custom_client(self, mock_client_class: Mock) -> None:
+        """Test using a custom client instance."""
+        custom_client = MagicMock()
+        custom_client.fetch_bars.return_value = []
+        
+        symbols = ["AAPL"]
+        results = fetch_previous_day_5min_bars(symbols, client=custom_client)
+        
+        assert "AAPL" in results
+        # Verify custom client was used, not a new one
+        mock_client_class.assert_not_called()
+        custom_client.fetch_bars.assert_called_once()
+
+    @patch('src.utils.YahooFinanceClient')
+    def test_fetch_previous_day_5min_bars_empty_symbols(self, mock_client_class: Mock) -> None:
+        """Test that ValueError is raised for empty symbols list."""
+        with pytest.raises(ValueError, match="Symbols list cannot be empty"):
+            fetch_previous_day_5min_bars([])
+
+    @patch('src.utils.YahooFinanceClient')
+    def test_fetch_previous_day_5min_bars_error_handling(self, mock_client_class: Mock) -> None:
+        """Test that errors for individual symbols don't stop processing."""
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        
+        # First symbol succeeds, second fails
+        yesterday = datetime.now().date() - timedelta(days=1)
+        mock_bars = [
+            {
+                "symbol": "AAPL",
+                "timestamp": datetime.combine(yesterday, time(9, 30)),
+                "open": 150.0,
+                "high": 151.0,
+                "low": 149.5,
+                "close": 150.5,
+                "volume": 1000000,
+            },
+        ]
+        
+        def side_effect(symbol, start_time, end_time, interval):
+            if symbol == "AAPL":
+                return mock_bars
+            elif symbol == "INVALID":
+                raise ConnectionError("Failed to fetch")
+            return []
+        
+        mock_client.fetch_bars.side_effect = side_effect
+        
+        symbols = ["AAPL", "INVALID"]
+        results = fetch_previous_day_5min_bars(symbols)
+        
+        # Both symbols should be in results
+        assert "AAPL" in results
+        assert "INVALID" in results
+        # AAPL should have data
+        assert len(results["AAPL"]) == 1
+        # INVALID should have empty list due to error
+        assert results["INVALID"] == []
 

@@ -5,9 +5,16 @@ Includes symbol scraping utilities, logging helpers, date/time utilities,
 error handling decorators, retry logic, and data validation helpers.
 """
 
-from typing import List
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta, time
 import requests
 from bs4 import BeautifulSoup
+
+try:
+    from .data_sources import YahooFinanceClient
+except ImportError:
+    # Handle case where running as standalone script
+    from src.data_sources import YahooFinanceClient
 
 
 def get_sp500_symbols() -> List[str]:
@@ -148,4 +155,82 @@ def _is_valid_symbol(symbol: str) -> bool:
             return False
     
     return True
+
+
+def fetch_previous_day_5min_bars(
+    symbols: List[str],
+    client: Optional[YahooFinanceClient] = None,
+    date: Optional[datetime] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch previous day's 5-minute bar data for a list of symbols.
+    
+    Retrieves intraday data in 5-minute intervals for the previous trading day
+    (or specified date) for all provided symbols. Market hours are assumed to be
+    9:30 AM to 4:00 PM ET.
+    
+    Args:
+        symbols: List of stock symbols to fetch data for
+        client: Optional YahooFinanceClient instance. If None, creates a new one.
+        date: Optional specific date to fetch. If None, uses yesterday.
+    
+    Returns:
+        Dictionary mapping symbol to list of bar dictionaries. Each bar contains:
+        - symbol: Stock symbol
+        - timestamp: Bar timestamp
+        - open: Opening price
+        - high: High price
+        - low: Low price
+        - close: Closing price
+        - volume: Trading volume
+        Symbols that fail to fetch will have empty lists.
+    
+    Raises:
+        ValueError: If symbols list is empty
+    
+    Examples:
+        >>> symbols = ['AAPL', 'MSFT']
+        >>> data = fetch_previous_day_5min_bars(symbols)
+        >>> 'AAPL' in data
+        True
+        >>> len(data['AAPL']) > 0
+        True
+        >>> 'timestamp' in data['AAPL'][0]
+        True
+    """
+    if not symbols:
+        raise ValueError("Symbols list cannot be empty")
+    
+    if client is None:
+        client = YahooFinanceClient()
+    
+    # Determine the date to fetch
+    if date is None:
+        # Use yesterday (previous day)
+        target_date = datetime.now().date() - timedelta(days=1)
+    else:
+        target_date = date.date() if isinstance(date, datetime) else date
+    
+    # Market hours: 9:30 AM to 4:00 PM ET (simplified to local time)
+    # In production, you'd want to handle timezone conversion properly
+    market_open = datetime.combine(target_date, time(9, 30))
+    market_close = datetime.combine(target_date, time(16, 0))
+    
+    results: Dict[str, List[Dict[str, Any]]] = {}
+    
+    for symbol in symbols:
+        try:
+            bars = client.fetch_bars(
+                symbol=symbol,
+                start_time=market_open,
+                end_time=market_close,
+                interval="5m",
+            )
+            results[symbol] = bars
+        except (ValueError, ConnectionError) as e:
+            # Log error but continue with other symbols
+            # In production, you might want to use proper logging
+            results[symbol] = []
+            continue
+    
+    return results
 

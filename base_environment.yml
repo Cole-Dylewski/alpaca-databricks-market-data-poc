@@ -19,7 +19,8 @@ dependencies:
   
   # Core data processing libraries
   - pyspark>=3.5.0
-  - delta-spark>=3.0.0
+  # Note: delta-spark is NOT needed - Databricks has Delta Lake built-in
+  # Installing it via pip causes conflicts with the native implementation
   
   # HTTP requests for API calls
   - requests>=2.31.0

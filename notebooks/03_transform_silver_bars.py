@@ -10,13 +10,15 @@
 # MAGIC %md
 # MAGIC # Silver Layer: Cleaned and Normalized Data
 # MAGIC
-# MAGIC TODO: Implement silver layer transformations:
-# MAGIC - Read from bronze Delta tables
-# MAGIC - Apply schema enforcement and type casting
-# MAGIC - Deduplicate records (symbol + timestamp)
-# MAGIC - Standardize column names and data types
-# MAGIC - Use Delta MERGE for idempotent processing
-# MAGIC - Write to silver Delta tables
+# MAGIC **Production Pipeline - Step 3: Silver Transformation**
+# MAGIC
+# MAGIC This notebook:
+# MAGIC - Reads from bronze Delta tables
+# MAGIC - Applies schema enforcement and type casting
+# MAGIC - Deduplicates records (symbol + timestamp)
+# MAGIC - Standardizes column names and data types
+# MAGIC - Uses Delta MERGE for idempotent processing
+# MAGIC - Writes to silver Delta tables
 
 # TODO: Add transformation code
 # Example:

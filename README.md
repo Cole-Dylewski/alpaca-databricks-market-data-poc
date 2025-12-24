@@ -73,11 +73,12 @@ databricks-market-data-poc/
 ├── requirements.txt           # Python package dependencies
 ├── LICENSE
 ├── notebooks/
-│   ├── 00_setup.py
-│   ├── 01_ingest_bronze_bars.py  # Symbol scraping & data ingestion
-│   ├── 02_transform_silver_bars.py
-│   ├── 03_gold_analytics.py
-│   └── 04_data_quality_checks.py
+│   ├── 00_setup.py            # Environment setup & initialization
+│   ├── 01_collect_raw_data.py # Scheduled data collection job
+│   ├── 02_ingest_bronze_bars.py  # Bronze layer ingestion
+│   ├── 03_transform_silver_bars.py  # Silver layer transformation
+│   ├── 04_gold_analytics.py   # Gold layer analytics
+│   └── 05_data_quality_checks.py  # Data quality validation
 ├── src/
 │   ├── data_sources/          # Data source clients
 │   │   ├── __init__.py
@@ -94,22 +95,167 @@ databricks-market-data-poc/
     └── test_utils.py              # Unit tests for utility functions (S&P 500 scraper)
 ```
 
-### Notebooks
+### Notebooks - Detailed Breakdown
 
-* `00_setup.py`
-  Environment setup, configuration loading, and shared utilities
+#### `00_setup.py` - Environment Setup & Initialization
 
-* `01_ingest_bronze_bars.py`
-  Generates list of S&P 500 stock symbols (scraped from stockanalysis.com) and downloads market bar data from configured data sources. Features dynamic path resolution that works in local Python, Databricks Repos, and Workspace environments. Saves data to JSON files by symbol for bronze layer processing.
+**Purpose**: One-time setup to initialize the Databricks environment for the pipeline.
 
-* `02_transform_silver_bars.py`
-  Cleans, deduplicates, and normalizes bronze data into silver tables
+**Key Features**:
+- **Dynamic Path Resolution**: Automatically detects project root across multiple environments (local Python, Databricks Repos, Workspace files)
+- **Storage Mode Configuration**: Supports both Unity Catalog volumes and workspace file storage with automatic fallback
+- **Spark Session Initialization**: Configures Spark with Delta Lake extensions for all downstream processing
+- **Directory Creation**: Creates necessary storage directories for raw data landing zone and medallion layers
+- **Schema Pre-creation**: Optionally pre-creates Delta table schemas for faster first ingestion
 
-* `03_gold_analytics.py`
-  Builds aggregated and analytical datasets for downstream use
+**Technical Highlights**:
+- Multi-path detection algorithm handles various Databricks deployment scenarios
+- Idempotent operations using `IF NOT EXISTS` clauses
+- Error handling with clear fallback messages
+- Configuration-driven storage selection (volumes vs workspace files)
 
-* `04_data_quality_checks.py`
-  Basic data validation and sanity checks
+**Skills Demonstrated**: Environment configuration, Databricks workspace management, Delta Lake setup, error handling
+
+---
+
+#### `01_collect_raw_data.py` - Scheduled Data Collection Job
+
+**Purpose**: Production-ready scheduled job that collects market data from external APIs and writes to raw landing zone.
+
+**Key Features**:
+- **S&P 500 Symbol Discovery**: Web scraping with BeautifulSoup to extract 500+ stock symbols from stockanalysis.com
+- **Holiday-Aware Date Logic**: Automatically determines last trading day, skipping weekends and all NYSE holidays (New Year's, MLK Day, Presidents' Day, Good Friday, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving, Christmas)
+- **Yahoo Finance Integration**: Uses `yfinance` library for reliable market data fetching with built-in rate limiting
+- **Batch Processing**: Processes symbols in batches with configurable delays to respect API rate limits
+- **Error Handling**: Comprehensive retry logic with exponential backoff for transient failures
+- **Single Timestamped File**: Writes all symbols' data to a single JSON file per date (`bars_YYYYMMDD.json`) for efficient Spark processing
+- **Idempotent Design**: Can be safely re-run without creating duplicates
+
+**Technical Highlights**:
+- **Holiday Calculation**: Implements Gregorian algorithm for Easter/Good Friday calculation
+- **Rate Limiting**: Configurable delays between API calls with automatic retry on 429 errors
+- **Progress Reporting**: Real-time progress updates during data collection
+- **Storage Abstraction**: Works with both Unity Catalog volumes and workspace files
+- **Spark Session Management**: Initializes Spark only when needed for file operations
+
+**Data Flow**:
+```
+External APIs (Yahoo Finance) 
+  → Python data collection 
+  → JSON serialization 
+  → Databricks Volume/Workspace storage
+  → Single timestamped file per trading day
+```
+
+**Skills Demonstrated**: Web scraping, API integration, rate limiting, error handling, production scheduling, data serialization, Spark file operations
+
+---
+
+#### `02_ingest_bronze_bars.py` - Bronze Layer Ingestion
+
+**Purpose**: Reads raw JSON files from landing zone and ingests into Bronze Delta tables with schema enforcement.
+
+**Key Features**:
+- **Spark JSON Reader**: Uses Spark's native JSON reader for efficient processing of large files (handles files of any size)
+- **Schema Enforcement**: Applies explicit Bronze schema with proper data types (timestamp, double, bigint)
+- **Metadata Addition**: Automatically adds ingestion metadata (data_source, ingestion_timestamp, batch_id)
+- **Idempotent MERGE**: Uses Delta Lake MERGE operations to prevent duplicates on re-runs
+- **Automatic Date Detection**: Finds most recent date directory or accepts date parameter
+- **Fallback Handling**: Falls back to Python JSON parsing if Spark reader fails (for edge cases)
+
+**Technical Highlights**:
+- **Delta MERGE Pattern**: Implements production-grade idempotent upsert logic
+  ```sql
+  MERGE INTO bronze_table AS target
+  USING new_data AS source
+  ON target.symbol = source.symbol 
+     AND target.timestamp = source.timestamp
+     AND target.batch_id = source.batch_id
+  WHEN MATCHED THEN UPDATE SET *
+  WHEN NOT MATCHED THEN INSERT *
+  ```
+- **Type Casting**: Ensures proper data type conversion (strings to timestamps, numbers to doubles)
+- **Catalog Management**: Automatically creates Unity Catalog schemas if they don't exist
+- **Data Validation**: Verifies data loaded before proceeding to transformations
+
+**Data Flow**:
+```
+Raw JSON files (landing zone)
+  → Spark JSON reader
+  → Schema validation & type casting
+  → Metadata enrichment
+  → Delta MERGE operation
+  → Bronze Delta table
+```
+
+**Skills Demonstrated**: Delta Lake operations, Spark DataFrame operations, schema management, idempotent processing, data validation
+
+---
+
+#### `03_transform_silver_bars.py` - Silver Layer Transformation
+
+**Purpose**: Transforms Bronze raw data into cleaned, normalized Silver layer with data quality improvements.
+
+**Key Features** (Planned Implementation):
+- **Schema Enforcement**: Applies strict Silver schema with non-nullable fields
+- **Deduplication**: Removes duplicate records based on symbol + timestamp composite key
+- **Data Cleaning**: 
+  - Handles missing values appropriately
+  - Validates price ranges (positive values, reasonable ranges)
+  - Standardizes data formats
+- **Type Casting**: Ensures all columns match Silver schema exactly
+- **Quality Flags**: Adds data quality indicators (is_valid, quality_score)
+- **Idempotent MERGE**: Uses Delta MERGE for safe re-processing
+
+**Technical Highlights** (Planned):
+- Window functions for deduplication
+- Data quality scoring algorithms
+- Null handling strategies
+- Outlier detection
+
+**Skills Demonstrated**: Data cleaning, deduplication strategies, data quality frameworks, Spark transformations
+
+---
+
+#### `04_gold_analytics.py` - Gold Layer Analytics
+
+**Purpose**: Creates analytics-ready aggregated datasets with technical indicators for downstream consumption.
+
+**Key Features** (Planned Implementation):
+- **Daily OHLCV Aggregation**: Aggregates intraday 5-minute bars to daily OHLCV per symbol
+- **Technical Indicators**: 
+  - Simple Moving Averages (5-day, 20-day, 50-day)
+  - Daily returns calculation
+  - Price range and volatility metrics
+- **Optimized Schema**: Denormalized structure optimized for querying and visualization
+- **Incremental Updates**: Only processes new data since last run
+
+**Technical Highlights** (Planned):
+- Spark window functions for moving averages
+- Time-series aggregations
+- Performance optimization for analytics queries
+
+**Skills Demonstrated**: Time-series analytics, Spark aggregations, window functions, analytical data modeling
+
+---
+
+#### `05_data_quality_checks.py` - Data Quality Validation
+
+**Purpose**: Validates data quality across all medallion layers and generates quality reports.
+
+**Key Features** (Planned Implementation):
+- **Null Value Checks**: Validates required fields are not null
+- **Range Validation**: Checks price ranges, volume ranges, timestamp ranges
+- **Completeness Checks**: Verifies expected row counts per symbol/date
+- **Consistency Checks**: Validates relationships between fields (e.g., high >= low, high >= close)
+- **Quality Reporting**: Generates summary reports with pass/fail indicators
+
+**Technical Highlights** (Planned):
+- Comprehensive validation framework
+- Automated quality scoring
+- Alert generation for quality issues
+
+**Skills Demonstrated**: Data quality frameworks, validation strategies, monitoring and alerting
 
 ### Source Code
 
@@ -131,22 +277,36 @@ databricks-market-data-poc/
 
 ---
 
-## Data Ingestion Approach
+## Production-Ready Features
 
-* **Symbol Discovery**: Scrapes S&P 500 stock symbols from stockanalysis.com to generate a curated list of 500+ major US stocks. The scraper (`get_sp500_symbols()` in `src/utils.py`) automatically extracts symbols from the HTML table and validates them.
-* **Dynamic Path Resolution**: Notebooks automatically detect the project root regardless of where the repository is cloned (local Python, Databricks Repos, or Workspace environments), making the project easily shareable and cloneable.
-* **Unified Interface**: All data sources implement `BaseMarketDataClient` for consistent API
-* **Yahoo Finance Integration**: Fully implemented REST API client with:
-  - Automatic retry logic with exponential backoff
-  - Rate limiting handling
-  - Standardized OHLCV data format
-  - No API keys required
-* **Flexible Configuration**: Supports parameterized symbols, timeframes, and time windows
-* **Incremental Ingestion**: Designed for fetching last N days/hours of data
-* **Error Handling**: Robust error handling and logging throughout
-* **Output Format**: Saves data to JSON files organized by symbol for bronze layer processing
+### Data Collection (`01_collect_raw_data.py`)
+* **Holiday-Aware Scheduling**: Automatically skips weekends and all NYSE holidays when determining trading days
+* **Robust Error Handling**: Comprehensive retry logic with exponential backoff for API failures
+* **Rate Limiting**: Configurable delays between API calls to respect provider limits
+* **Progress Tracking**: Real-time progress reporting during data collection
+* **Idempotent Operations**: Can be safely re-run without creating duplicates
+* **Storage Flexibility**: Supports both Unity Catalog volumes and workspace file storage
 
-Streaming and WebSocket ingestion are intentionally out of scope for this POC.
+### Bronze Ingestion (`02_ingest_bronze_bars.py`)
+* **Schema Enforcement**: Explicit Spark schemas ensure data quality at ingestion
+* **Delta MERGE Operations**: Idempotent upsert pattern prevents duplicates
+* **Metadata Tracking**: Automatic addition of ingestion metadata for lineage
+* **Large File Handling**: Uses Spark's native JSON reader (no size limits)
+* **Type Safety**: Proper type casting and validation before writing to Delta
+
+### Architecture Patterns
+* **Medallion Architecture**: Clear separation between raw (Bronze), cleaned (Silver), and analytics (Gold) layers
+* **Separation of Concerns**: Data collection separated from processing for better scalability
+* **Configuration-Driven**: All paths and settings configurable via `src/config.py`
+* **Extensible Design**: Base client interface allows easy addition of new data sources
+* **Production Scheduling**: Designed to run as scheduled Databricks jobs
+
+### Code Quality
+* **Type Hints**: Strict typing throughout (Python type hints, Spark schemas)
+* **Comprehensive Testing**: Unit tests with pytest for all utility functions
+* **Documentation**: Google-style docstrings with examples
+* **Error Messages**: Clear, actionable error messages for debugging
+* **Modular Design**: Functions designed for testability and reusability
 
 ---
 
@@ -214,11 +374,54 @@ Although this is a demonstration project, basic quality checks are included:
    - See `src/config.py` for data source configuration options
 
 4. **Run notebooks in order:**
-   1. `00_setup.py` - Environment setup
-   2. `01_ingest_bronze_bars.py` - Generate symbol list and download market data
-   3. `02_transform_silver_bars.py` - Clean and normalize data
-   4. `03_gold_analytics.py` - Build analytics tables
-   5. `04_data_quality_checks.py` - Validate data quality
+   1. `00_setup.py` - Environment setup (run once)
+   2. `01_collect_raw_data.py` - Collect market data (scheduled daily)
+   3. `02_ingest_bronze_bars.py` - Ingest to Bronze layer
+   4. `03_transform_silver_bars.py` - Transform to Silver layer
+   5. `04_gold_analytics.py` - Create Gold analytics
+   6. `05_data_quality_checks.py` - Validate data quality
+
+5. **Configure as Databricks Jobs** (optional):
+   - Create jobs in Databricks Workflows UI
+   - Set up dependencies between jobs
+   - Schedule collection job to run daily after market close
+   - Configure alerts and retry policies
+
+---
+
+## Technical Skills Demonstrated
+
+This project showcases proficiency in:
+
+### Data Engineering
+- **ETL/ELT Pipeline Design**: End-to-end data pipeline from collection to analytics
+- **Medallion Architecture**: Bronze (raw) → Silver (cleaned) → Gold (analytics) pattern
+- **Incremental Processing**: Idempotent operations for reliable data updates
+- **Schema Management**: Explicit schemas with type enforcement at each layer
+
+### Databricks & Spark
+- **Delta Lake**: MERGE operations, schema evolution, time travel
+- **Spark DataFrames**: Efficient data processing with Spark SQL
+- **Unity Catalog**: Modern data governance and catalog management
+- **Job Orchestration**: Production-ready job scheduling and dependencies
+
+### Python Development
+- **Type Safety**: Strict type hints throughout codebase
+- **Error Handling**: Comprehensive exception handling with retry logic
+- **Testing**: Unit tests with pytest and mocking
+- **Code Organization**: Modular design with clear separation of concerns
+
+### API Integration & Web Scraping
+- **REST API Integration**: Yahoo Finance API with rate limiting
+- **Web Scraping**: BeautifulSoup for symbol discovery
+- **Holiday Logic**: Complex date calculations (Easter, trading holidays)
+- **Retry Patterns**: Exponential backoff for transient failures
+
+### Production Engineering
+- **Idempotency**: Safe re-runs without side effects
+- **Configuration Management**: Environment-aware configuration
+- **Error Recovery**: Graceful degradation and fallback mechanisms
+- **Monitoring**: Progress tracking and quality validation
 
 ---
 
@@ -229,37 +432,56 @@ This project is designed for:
 * Hiring managers evaluating data engineering candidates
 * Interview discussions around Databricks, Spark, and lakehouse design
 * Demonstrating architectural thinking and clean implementation practices
+* Portfolio showcase of production-ready data engineering skills
 
-It is not intended for live trading, real-time analytics, or production deployment.
+It is not intended for live trading, real-time analytics, or production deployment without additional hardening.
 
 ---
 
 ## Implementation Status
 
 ### ✅ Completed
-* Yahoo Finance REST API client with full test coverage
-* Base client abstract interface
-* S&P 500 symbol scraper from stockanalysis.com with comprehensive test coverage
-* Dynamic path resolution for notebooks (works in local Python, Databricks Repos, and Workspace)
-* Databricks base environment configuration
-* Testing framework setup with pytest
+* **Data Collection Pipeline**:
+  - Yahoo Finance integration using `yfinance` library
+  - S&P 500 symbol scraper with comprehensive test coverage
+  - Holiday-aware trading day calculation (all NYSE holidays)
+  - Rate limiting and retry logic with exponential backoff
+  - Single timestamped JSON file per date for efficient processing
+  
+* **Bronze Layer Ingestion**:
+  - Spark-based JSON reading for large files
+  - Explicit schema enforcement with proper data types
+  - Delta Lake MERGE operations for idempotent processing
+  - Metadata enrichment (data_source, ingestion_timestamp, batch_id)
+  - Unity Catalog and workspace file storage support
 
-### 🚧 In Progress
-* Bronze layer ingestion pipeline
-* Symbol list generation and persistence
+* **Infrastructure**:
+  - Dynamic path resolution (works in local Python, Databricks Repos, Workspace)
+  - Base client abstract interface for extensibility
+  - Comprehensive test coverage with pytest
+  - Databricks base environment configuration
+  - Production-ready error handling and logging
 
-### 📋 TODO
+* **Architecture**:
+  - Medallion architecture (Bronze → Silver → Gold)
+  - Separation of concerns (collection vs. processing)
+  - Idempotent operations throughout
+  - Configuration-driven design
+
+### 🚧 In Progress / Planned
+* Silver layer transformations (deduplication, cleaning, normalization)
+* Gold layer analytics (daily aggregations, technical indicators)
+* Data quality checks framework
+* Databricks Jobs orchestration (can be configured manually)
+
+### 📋 Future Enhancements
 * Alpaca API client implementation
-* Silver layer transformations
-* Gold layer analytics
-* Delta Lake table schemas
-* Data quality checks
-* Databricks Jobs orchestration
-* Structured Streaming ingestion
+* Structured Streaming for real-time ingestion
+* Advanced data quality frameworks (Great Expectations integration)
 * Secret scopes / key vault integration
 * CI/CD for notebooks and schemas
-* Advanced data quality frameworks
 * Visualization dashboards
+* Performance optimization and tuning
 
 ---
 

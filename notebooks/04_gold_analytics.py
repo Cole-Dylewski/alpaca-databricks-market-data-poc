@@ -10,6 +10,8 @@
 # MAGIC %md
 # MAGIC # Gold Layer: Analytics and Aggregations
 # MAGIC
+# MAGIC **Production Pipeline - Step 4: Gold Analytics**
+# MAGIC
 # MAGIC TODO: Implement gold layer analytics:
 # MAGIC - Read from silver Delta tables
 # MAGIC - Aggregate to daily OHLCV per symbol

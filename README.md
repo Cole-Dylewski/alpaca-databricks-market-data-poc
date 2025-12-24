@@ -2,9 +2,9 @@
 
 ## Overview
 
-This project is a proof-of-concept data engineering pipeline that demonstrates how financial market data can be ingested from multiple public and free data sources into Databricks using Apache Spark and Delta Lake. The primary goal is to showcase modern lakehouse design patterns, incremental ingestion techniques, and Spark-based analytical transformations in a Databricks environment.
+This project is a proof-of-concept data engineering pipeline that demonstrates how financial market data can be ingested from Yahoo Finance into Databricks using Apache Spark and Delta Lake. The primary goal is to showcase modern lakehouse design patterns, incremental ingestion techniques, and Spark-based analytical transformations in a Databricks environment.
 
-The project supports multiple market data sources, including Alpaca (optional, requires API keys) and other public/free data sources that can be used without authentication. This makes the repository easily cloneable and usable by anyone without requiring API keys or secrets.
+The project uses Yahoo Finance as the sole data source, which requires no API keys and makes the repository easily cloneable and usable by anyone without requiring authentication or secrets.
 
 The project is intentionally scoped as a technical demonstration rather than a production system. It emphasizes clarity, correctness, and architectural best practices over enterprise-scale operational complexity.
 
@@ -26,7 +26,7 @@ The pipeline follows a standard Databricks lakehouse pattern:
 
 ### Bronze Layer (Raw Ingestion)
 
-* Data is pulled from multiple market data sources (e.g., Alpaca, Yahoo Finance, Alpha Vantage, etc.)
+* Data is pulled from Yahoo Finance using the `yfinance` library
 * Raw records are ingested with minimal transformation
 * Metadata such as ingestion timestamp and data source are added
 * Data is written append-only to Delta tables
@@ -52,12 +52,9 @@ The pipeline follows a standard Databricks lakehouse pattern:
 * Apache Spark
 * Delta Lake
 * Databricks (Free Edition)
-* Multiple Market Data Sources:
-  * **Yahoo Finance** (✅ implemented, free, no API keys required)
-  * Alpaca Market Data API (optional, requires API keys, TODO)
-  * Alpha Vantage (free tier available, TODO)
-  * Other public/free market data APIs
-* REST-based ingestion using `requests`
+* Market Data Source:
+  * **Yahoo Finance** (✅ implemented, free, no API keys required) - using `yfinance` library
+* Web scraping for symbol lists using `beautifulsoup4` (S&P 500 symbols from stockanalysis.com)
 * Web scraping for symbol lists using `beautifulsoup4` (S&P 500 symbols from stockanalysis.com)
 * Testing framework: `pytest` with comprehensive test coverage
 
@@ -83,8 +80,7 @@ databricks-market-data-poc/
 │   ├── data_sources/          # Data source clients
 │   │   ├── __init__.py
 │   │   ├── base_client.py     # Abstract base class for data sources
-│   │   ├── yahoo_finance.py   # Yahoo Finance REST API client (✅ implemented)
-│   │   └── alpaca_client.py   # Alpaca API client (optional, TODO)
+│   │   └── yahoo_finance.py   # Yahoo Finance client using yfinance library (✅ implemented)
 │   ├── config.py
 │   ├── schemas.py
 │   ├── transforms.py
@@ -260,11 +256,9 @@ Raw JSON files (landing zone)
 ### Source Code
 
 * `data_sources/`
-  Modular data source clients that can be easily extended:
-  * `base_client.py`: Abstract base class defining the interface for all data sources (✅ implemented)
-  * `yahoo_finance.py`: Yahoo Finance REST API client with retry logic and error handling (✅ implemented, fully tested)
-  * `alpaca_client.py`: Alpaca API client (optional, requires API keys, TODO)
-  * Additional data sources can be added by implementing the base client interface
+  Data source client implementation:
+  * `base_client.py`: Abstract base class defining the interface for data sources (✅ implemented)
+  * `yahoo_finance.py`: Yahoo Finance client using `yfinance` library with retry logic and error handling (✅ implemented, fully tested)
 
 * `schemas.py`
   Explicit Spark schemas used across ingestion and transformation layers
@@ -326,8 +320,7 @@ Although this is a demonstration project, basic quality checks are included:
 * API keys are not hardcoded
 * Credentials are expected to be provided via environment variables or notebook-scoped configuration
 * No secrets are committed to the repository
-* **The project can be used without any API keys** by defaulting to free data sources (e.g., Yahoo Finance)
-* Alpaca and other premium data sources are optional and only required if explicitly configured
+* **No API keys required**: The project uses Yahoo Finance which is free and requires no authentication
 
 ---
 
@@ -368,10 +361,9 @@ Although this is a demonstration project, basic quality checks are included:
      - Install packages from `requirements.txt` in your Databricks cluster
      - Note: PySpark and Delta Lake are typically pre-installed in Databricks
 
-3. **Configure data sources (optional):**
-   - By default, the project uses Yahoo Finance which requires no API keys
-   - To use Alpaca or other premium sources, set API credentials as environment variables or notebook parameters
-   - See `src/config.py` for data source configuration options
+3. **Data source configuration:**
+   - The project uses Yahoo Finance by default, which requires no API keys
+   - See `src/config.py` for rate limiting and retry configuration options
 
 4. **Run notebooks in order:**
    1. `00_setup.py` - Environment setup (run once)
@@ -475,7 +467,6 @@ It is not intended for live trading, real-time analytics, or production deployme
 * Databricks Jobs orchestration (can be configured manually)
 
 ### 📋 Future Enhancements
-* Alpaca API client implementation
 * Structured Streaming for real-time ingestion
 * Advanced data quality frameworks (Great Expectations integration)
 * Secret scopes / key vault integration

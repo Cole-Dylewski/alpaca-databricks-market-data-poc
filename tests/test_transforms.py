@@ -198,8 +198,22 @@ class TestCleanBronzeToSilver:
             assert 0.0 <= row["quality_score"] <= 1.0
             assert row["is_valid"] in [0, 1]
 
-    def test_clean_bronze_to_silver_filters_nulls(self, spark, bronze_schema):
+    def test_clean_bronze_to_silver_filters_nulls(self, spark):
         """Test that records with null critical fields are filtered."""
+        # Use nullable schema for test data to allow nulls
+        nullable_schema = StructType(
+            [
+                StructField("symbol", StringType(), nullable=True),
+                StructField("timestamp", TimestampType(), nullable=True),
+                StructField("open", DoubleType(), nullable=True),
+                StructField("high", DoubleType(), nullable=True),
+                StructField("low", DoubleType(), nullable=True),
+                StructField("close", DoubleType(), nullable=True),
+                StructField("volume", LongType(), nullable=True),
+                StructField("ingestion_timestamp", TimestampType(), nullable=True),
+                StructField("batch_id", StringType(), nullable=True),
+            ]
+        )
         data = [
             (
                 "SYM1",
@@ -246,7 +260,7 @@ class TestCleanBronzeToSilver:
                 "20240102",
             ),  # null symbol
         ]
-        df = spark.createDataFrame(data, schema=bronze_schema)
+        df = spark.createDataFrame(data, schema=nullable_schema)
 
         result = clean_bronze_to_silver(df)
 

@@ -22,7 +22,83 @@ The project is intentionally scoped as a technical demonstration rather than a p
 
 ## Architecture
 
-The pipeline follows a standard Databricks lakehouse pattern:
+The pipeline follows a standard Databricks lakehouse pattern with a medallion architecture (Bronze → Silver → Gold).
+
+### Data Flow Diagram
+
+```mermaid
+erDiagram
+    RAW_FILES ||--o{ BRONZE_BARS : "Auto Loader\nStreaming"
+    BRONZE_BARS ||--|| SILVER_BARS : "Clean & Deduplicate"
+    SILVER_BARS ||--|| GOLD_DAILY_OHLCV : "Aggregate Daily"
+    GOLD_DAILY_OHLCV ||--|| GOLD_ANALYTICS : "Calculate Indicators"
+    
+    BRONZE_BARS {
+        string symbol PK
+        timestamp timestamp PK
+        double open
+        double high
+        double low
+        double close
+        bigint volume
+        timestamp ingestion_timestamp
+        string batch_id
+    }
+    
+    SILVER_BARS {
+        string symbol PK
+        timestamp timestamp PK
+        double open "non-null"
+        double high "non-null"
+        double low "non-null"
+        double close "non-null"
+        bigint volume "non-null"
+        timestamp processed_timestamp
+        int is_valid
+        double quality_score
+    }
+    
+    GOLD_DAILY_OHLCV {
+        string symbol PK
+        timestamp trade_date PK
+        double open
+        double high
+        double low
+        double close
+        bigint volume
+        int num_bars
+        double daily_return
+        double price_range
+        double avg_price
+        timestamp updated_timestamp
+    }
+    
+    GOLD_ANALYTICS {
+        string symbol PK
+        timestamp trade_date PK
+        double sma_5
+        double sma_20
+        double sma_50
+        double volatility
+        timestamp updated_timestamp
+    }
+```
+
+### Pipeline Flow
+
+```mermaid
+flowchart TD
+    A[Yahoo Finance API] -->|5-minute bars| B[Raw JSON Files<br/>Landing Zone]
+    B -->|Auto Loader<br/>Streaming| C[Bronze Layer<br/>main.bronze.bars]
+    C -->|Clean & Deduplicate<br/>Quality Scoring| D[Silver Layer<br/>main.silver.bars]
+    D -->|Aggregate Daily<br/>OHLCV| E[Gold Daily OHLCV<br/>main.gold.daily_ohlcv]
+    E -->|Calculate Indicators<br/>SMAs & Volatility| F[Gold Analytics<br/>main.gold.analytics]
+    
+    style C fill:#e8d5b7,stroke:#8b6f47,stroke-width:2px,color:#000
+    style D fill:#e8e8e8,stroke:#808080,stroke-width:2px,color:#000
+    style E fill:#fff4cc,stroke:#d4af37,stroke-width:2px,color:#000
+    style F fill:#fff4cc,stroke:#d4af37,stroke-width:2px,color:#000
+```
 
 ### Bronze Layer (Raw Ingestion)
 

@@ -204,13 +204,17 @@ try:
     if new_dates_count > 0:
         print(f"[INFO] Found {new_dates_count} new symbol-date combinations to process")
         # Filter silver to only new dates
-        new_dates_df.createOrReplaceTempView("new_dates")
-        silver_df = silver_df.join(
-            new_dates_df.alias("nd"),
-            (col("symbol") == col("nd.symbol")) &
-            (date_trunc("day", col("timestamp")) == col("nd.trade_date")),
+        # Use fully qualified column references to avoid ambiguity
+        silver_df_alias = silver_df.alias("silver")
+        new_dates_alias = new_dates_df.alias("nd")
+        # Get all column names from silver_df to select explicitly
+        silver_columns = [col(f"silver.{c}").alias(c) for c in silver_df.columns]
+        silver_df = silver_df_alias.join(
+            new_dates_alias,
+            (col("silver.symbol") == col("nd.symbol")) &
+            (date_trunc("day", col("silver.timestamp")) == col("nd.trade_date")),
             how="inner"
-        ).select(silver_df["*"])
+        ).select(*silver_columns)
     else:
         print(f"[INFO] No new dates to process")
         # Check if table exists - if not, process all

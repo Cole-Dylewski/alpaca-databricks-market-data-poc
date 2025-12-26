@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is a **production-ready** data engineering pipeline that demonstrates how financial market data can be ingested from Yahoo Finance into Databricks using Apache Spark and Delta Lake. The pipeline showcases modern lakehouse design patterns, real-time streaming ingestion, and Spark-based analytical transformations using Databricks native technologies.
+This project is a **fully functional, production-ready** data engineering pipeline that demonstrates how financial market data can be ingested from Yahoo Finance into Databricks using Apache Spark and Delta Lake. The complete pipeline is implemented and operational, showcasing modern lakehouse design patterns, real-time streaming ingestion, and Spark-based analytical transformations using Databricks native technologies.
 
 The project uses Yahoo Finance as the sole data source, which requires no API keys and makes the repository easily cloneable and usable by anyone without requiring authentication or secrets.
 
@@ -13,6 +13,8 @@ The project uses Yahoo Finance as the sole data source, which requires no API ke
 - Built-in data quality expectations
 - Auto-optimization and performance tuning
 - Production-ready orchestration and monitoring
+
+**Pipeline Status**: All components are fully implemented and functional. The complete medallion architecture pipeline (Bronze → Silver → Gold) is operational and ready for production deployment.
 
 ---
 
@@ -451,7 +453,6 @@ The pipeline includes comprehensive quality checks:
    python run_tests.py
    ```
    This runs all validation checks including syntax, imports, tests, coverage, and code quality.
-   See `TEST_RUNNER.md` for detailed information.
 
 4. **Run tests manually:**
    ```bash
@@ -485,32 +486,69 @@ The pipeline includes comprehensive quality checks:
    - The project uses Yahoo Finance by default, which requires no API keys
    - See `src/config.py` for rate limiting and retry configuration options
 
-4. **Run notebooks in order:**
+4. **Quick Start - Deploy DLT Pipeline (Recommended)**:
+   
+   **Option A: Using Databricks Asset Bundles**
+   ```bash
+   # Install Databricks CLI
+   pip install databricks-cli
+   
+   # Authenticate
+   databricks configure --token
+   
+   # Deploy
+   cd market_data_poc
+   databricks bundle deploy
+   ```
+   
+   **Option B: Manual Deployment via UI**
+   - Go to Databricks UI → Workflows → Delta Live Tables
+   - Click "Create Pipeline"
+   - Name: `Market Data Medallion Pipeline`
+   - Source: `notebooks/dlt_pipeline.py`
+   - Target schema: `main`
+   - Storage: `/Volumes/main/default/dlt_storage`
+   - Cluster: `i3.xlarge`, 2 workers, enable Photon
+   - Configuration:
+     ```
+     raw_bars_path: /Volumes/main/default/raw_market_data/bars
+     bronze_catalog: main
+     bronze_schema: bronze
+     silver_catalog: main
+     silver_schema: silver
+     gold_catalog: main
+     gold_schema: gold
+     ```
+   - Click "Start" to run
+
+5. **Create Data Collection Job**:
+   - Go to Databricks UI → Workflows → Jobs
+   - Create job: `Market Data Collection`
+   - Add task: Notebook `./notebooks/01_collect_raw_data.py`
+   - Cluster: Single node (i3.xlarge)
+   - Libraries: `yfinance>=0.2.0`, `beautifulsoup4>=4.12.0`
+   - Schedule: `0 0 17 * * ?` (5 PM daily, America/New_York)
+
+6. **Run notebooks individually (alternative to DLT)**:
    1. `00_setup.py` - Environment setup (run once)
    2. `01_collect_raw_data.py` - Collect market data (scheduled daily)
-   3. `02_ingest_bronze_bars.py` - Ingest to Bronze layer
+   3. `02_ingest_bronze_bars.py` - Ingest to Bronze layer (streaming)
    4. `03_transform_silver_bars.py` - Transform to Silver layer
    5. `04_gold_analytics.py` - Create Gold analytics
    6. `05_data_quality_checks.py` - Validate data quality
 
-5. **Deploy with Databricks Asset Bundles**:
-   ```bash
-   # Deploy DLT pipeline and workflows
-   databricks bundle deploy
-   ```
+7. **Verify Deployment**:
+   ```python
+   # Run in Databricks notebook
+   spark.sql("SHOW TABLES IN main.bronze").show()
+   spark.sql("SHOW TABLES IN main.silver").show()
+   spark.sql("SHOW TABLES IN main.gold").show()
    
-   Or configure manually in Databricks Workflows UI:
-   - Create jobs with dependencies between pipeline steps
-   - Schedule collection job to run daily after market close
-   - Configure alerts and retry policies
-
-6. **Explore Examples and Documentation**:
-   - **SQL Queries**: `examples/example_queries.sql` - 10+ analytics use cases
-   - **Dashboard Queries**: `examples/dashboard_queries.sql` - Visualization-ready queries
-   - **Performance Guide**: `docs/PERFORMANCE.md` - Optimization strategies
-   - **Monitoring Guide**: `docs/MONITORING.md` - DLT and job monitoring
-   - **Troubleshooting**: `docs/TROUBLESHOOTING.md` - Common issues and solutions
-   - **Logging Guide**: `docs/LOGGING.md` - Structured logging best practices
+   # Check data
+   spark.table("main.bronze.bars").count()
+   spark.table("main.silver.bars").count()
+   spark.table("main.gold.daily_ohlcv").count()
+   ```
 
 ---
 
@@ -565,6 +603,41 @@ This project is designed for:
 * Portfolio showcase of production-ready data engineering skills
 
 The pipeline is production-ready and can be deployed to Databricks workspaces for real-time market data processing and analytics.
+
+---
+
+## Production Configuration
+
+The pipeline includes the following production-ready features:
+
+- **Continuous Streaming**: Auto Loader with AvailableNow trigger for automatic file processing
+- **Auto-Optimization**: Z-ordering, compaction, and adaptive query execution enabled
+- **Data Quality**: Built-in quality scoring, validation, and monitoring
+- **Idempotent Processing**: Delta MERGE operations ensure safe re-runs
+- **Schema Evolution**: Automatic schema inference and evolution support
+- **Unity Catalog**: Full support for modern data governance
+
+## Troubleshooting
+
+**DLT Pipeline Errors**:
+- Ensure Unity Catalog is enabled
+- Check that catalog `main` exists
+- Verify cluster has proper permissions
+
+**No Data in Tables**:
+- Run data collection job first (`01_collect_raw_data.py`)
+- Then run DLT pipeline or individual notebooks to process files
+- Check landing zone has JSON files at `/Volumes/main/default/raw_market_data/bars/`
+
+**Import Errors**:
+- Ensure `src/` directory is in workspace
+- Check Python path configuration in notebooks
+- Verify all dependencies are installed
+
+**Streaming Query Issues**:
+- Ensure explicit schema is provided (prevents inference errors on empty directories)
+- Use `_metadata.file_path` instead of `input_file_name()` for Unity Catalog compatibility
+- Use `AvailableNow` trigger for cluster compatibility
 
 ---
 

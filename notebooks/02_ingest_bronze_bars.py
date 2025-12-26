@@ -141,7 +141,7 @@ print(f"Added project root to path: {project_root}")
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, current_timestamp
-from pyspark.sql.types import StructType
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, LongType
 from src.config import DATABRICKS_PATHS
 from src.schemas import BRONZE_BARS_SCHEMA
 
@@ -152,20 +152,63 @@ from src.schemas import BRONZE_BARS_SCHEMA
 
 # COMMAND ----------
 
-spark = SparkSession.builder \
-    .appName("Bronze Ingestion") \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .config("spark.databricks.delta.optimizeWrite.enabled", "true") \
-    .config("spark.databricks.delta.autoCompact.enabled", "true") \
-    .config("spark.databricks.io.cache.enabled", "true") \
-    .getOrCreate()
+# Detect if we're running in Databricks
+def is_databricks():
+    """Check if running in Databricks environment."""
+    try:
+        import dbutils
+        return dbutils is not None
+    except (NameError, ImportError):
+        return False
 
-print("Spark session initialized with Delta Lake and Databricks optimizations")
-print("  - Delta Lake extensions enabled")
-print("  - Auto-optimize write enabled")
-print("  - Auto-compact enabled")
-print("  - IO cache enabled")
+# Initialize Spark session with Delta Lake support
+# Handle both Databricks (built-in Delta) and local environments (delta-spark package)
+if is_databricks():
+    # Databricks: Delta Lake is built-in, no need for delta-spark package
+    spark = SparkSession.builder \
+        .appName("Bronze Ingestion") \
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+        .config("spark.databricks.delta.optimizeWrite.enabled", "true") \
+        .config("spark.databricks.delta.autoCompact.enabled", "true") \
+        .config("spark.databricks.io.cache.enabled", "true") \
+        .getOrCreate()
+    
+    print("Spark session initialized with Delta Lake (Databricks built-in)")
+    print("  - Delta Lake extensions enabled")
+    print("  - Auto-optimize write enabled")
+    print("  - Auto-compact enabled")
+    print("  - IO cache enabled")
+else:
+    # Local/non-Databricks: Use delta-spark package with configure_spark_with_delta_pip
+    try:
+        from delta import configure_spark_with_delta_pip
+        
+        builder = SparkSession.builder \
+            .appName("Bronze Ingestion") \
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        
+        spark = configure_spark_with_delta_pip(builder).getOrCreate()
+        
+        print("Spark session initialized with Delta Lake (delta-spark package)")
+        print("  - Delta Lake extensions enabled")
+        print("  - Using delta-spark package for local development")
+    except ImportError:
+        print("[ERROR] delta-spark package not found. Installing...")
+        import subprocess
+        import sys
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "delta-spark>=3.0.0"])
+        from delta import configure_spark_with_delta_pip
+        
+        builder = SparkSession.builder \
+            .appName("Bronze Ingestion") \
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+        
+        spark = configure_spark_with_delta_pip(builder).getOrCreate()
+        
+        print("[OK] delta-spark installed and Spark session initialized")
 
 # COMMAND ----------
 
@@ -215,10 +258,25 @@ except Exception as e:
 
 from pyspark.sql.functions import (
     col, lit, current_timestamp, to_timestamp,
-    input_file_name, regexp_extract
+    regexp_extract
 )
 
+# Define schema for raw JSON input files
+# This schema represents the structure of the JSON files before transformation
+# Explicitly providing schema prevents inference errors when directory is empty or files don't exist yet
+# Note: timestamp is read as string (ISO format) and converted to timestamp type in transformation
+RAW_JSON_SCHEMA = StructType([
+    StructField("symbol", StringType(), nullable=True),
+    StructField("timestamp", StringType(), nullable=True),  # ISO format string, converted to timestamp
+    StructField("open", DoubleType(), nullable=True),
+    StructField("high", DoubleType(), nullable=True),
+    StructField("low", DoubleType(), nullable=True),
+    StructField("close", DoubleType(), nullable=True),
+    StructField("volume", LongType(), nullable=True),
+])
+
 # Define the streaming source using Auto Loader
+# Explicitly provide schema to avoid inference errors when directory is empty
 # Auto Loader automatically detects new files and handles schema evolution
 streaming_df = spark.readStream \
     .format("cloudFiles") \
@@ -226,12 +284,14 @@ streaming_df = spark.readStream \
     .option("cloudFiles.schemaLocation", f"{checkpoint_path}/schema") \
     .option("cloudFiles.inferColumnTypes", "true") \
     .option("pathGlobFilter", "bars_*.json") \
+    .schema(RAW_JSON_SCHEMA) \
     .load(raw_bars_path)
 
 print("[OK] Streaming source configured with Auto Loader")
 print("     - Automatically detects new JSON files")
 print("     - Handles schema evolution")
 print("     - Processes files matching bars_*.json pattern")
+print("     - Explicit schema provided to prevent inference errors")
 
 # COMMAND ----------
 
@@ -241,12 +301,14 @@ print("     - Processes files matching bars_*.json pattern")
 # COMMAND ----------
 
 # Extract batch_id from filename (bars_YYYYMMDD.json)
+# Unity Catalog requires using _metadata.file_path instead of input_file_name()
 bronze_stream = streaming_df \
     .withColumn(
         "batch_id",
-        regexp_extract(input_file_name(), r"bars_(\d{8})\.json", 1)
+        regexp_extract(col("_metadata.file_path"), r"bars_(\d{8})\.json", 1)
     ) \
     .withColumn("ingestion_timestamp", current_timestamp()) \
+    .withColumn("data_source", lit("yahoo_finance")) \
     .select(
         col("symbol").cast("string"),
         to_timestamp(col("timestamp")).alias("timestamp"),
@@ -256,12 +318,13 @@ bronze_stream = streaming_df \
         col("close").cast("double"),
         col("volume").cast("bigint"),
         col("ingestion_timestamp").cast("timestamp"),
-        col("batch_id").cast("string")
+        col("batch_id").cast("string"),
+        col("data_source").cast("string")
     )
 
 print("[OK] Streaming transformation configured")
 print("     - Schema enforcement applied")
-print("     - Metadata columns added (ingestion_timestamp, batch_id)")
+print("     - Metadata columns added (ingestion_timestamp, batch_id, data_source)")
 
 # COMMAND ----------
 
@@ -277,15 +340,18 @@ try:
     print(f"     Writing to: {bronze_table}")
     print(f"     Checkpoint: {checkpoint_path}")
     
-    # CONTINUOUS MODE: Production-ready streaming that processes files as they arrive
-    print(f"\n=== Continuous Streaming Mode ===")
-    print("Stream will keep running and automatically process new files as they arrive.")
-    print("This is production-ready continuous ingestion.")
-    print("To stop: query.stop() or interrupt the notebook")
+    # AVAILABLE NOW MODE: Processes all available files and stops
+    # This trigger type is supported on all cluster types including Spark Connect
+    # For continuous processing, run this notebook periodically or use a scheduled job
+    print(f"\n=== Available Now Trigger Mode ===")
+    print("Stream will process all available files and then stop.")
+    print("This is compatible with all Databricks cluster types.")
+    print("For continuous processing, schedule this notebook to run periodically.")
     
     query = bronze_stream.writeStream \
         .format("delta") \
         .outputMode("append") \
+        .trigger(availableNow=True) \
         .option("checkpointLocation", checkpoint_path) \
         .option("mergeSchema", "true") \
         .table(bronze_table)
@@ -301,14 +367,15 @@ except Exception as e:
 # MAGIC %md
 # MAGIC ## Streaming Ingestion Complete
 # MAGIC
-# MAGIC **Batch Mode**: Processed all available files and stopped.
+# MAGIC **Available Now Mode**: Processed all available files and stopped.
 # MAGIC
-# MAGIC **For Continuous Streaming** (process files as they arrive):
-# MAGIC - Uncomment the continuous mode section in Step 6
-# MAGIC - The stream will keep running and automatically process new files
-# MAGIC - Use `query.stop()` to stop the stream
+# MAGIC **For Continuous Processing** (process files as they arrive):
+# MAGIC - Schedule this notebook to run periodically (e.g., every 5 minutes) using Databricks Jobs
+# MAGIC - Each run will process all new files that have arrived since the last run
+# MAGIC - The `AvailableNow` trigger is compatible with all cluster types including Spark Connect
+# MAGIC - Checkpointing ensures files are only processed once, even if the job runs multiple times
 # MAGIC
-# MAGIC **Checkpointing**: The checkpoint ensures exactly-once semantics - files are only processed once even if the job restarts.
+# MAGIC **Checkpointing**: The checkpoint ensures exactly-once semantics - files are only processed once even if the job restarts or runs multiple times.
 # MAGIC
 # MAGIC **Auto Loader Benefits**:
 # MAGIC - Automatically detects new files

@@ -95,9 +95,10 @@ def bronze_bars():
         .load(raw_bars_path)
         .withColumn(
             "batch_id",
-            F.regexp_extract(F.input_file_name(), r"bars_(\d{8})\.json", 1)
+            F.regexp_extract(F.col("_metadata.file_path"), r"bars_(\d{8})\.json", 1)
         )
         .withColumn("ingestion_timestamp", F.current_timestamp())
+        .withColumn("data_source", F.lit("yahoo_finance"))
         .select(
             F.col("symbol").cast("string"),
             F.to_timestamp(F.col("timestamp")).alias("timestamp"),
@@ -107,7 +108,8 @@ def bronze_bars():
             F.col("close").cast("double"),
             F.col("volume").cast("bigint"),
             F.col("ingestion_timestamp").cast("timestamp"),
-            F.col("batch_id").cast("string")
+            F.col("batch_id").cast("string"),
+            F.col("data_source").cast("string")
         )
     )
 
